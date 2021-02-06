@@ -63,6 +63,9 @@ const
   MAX_GRAFFITI_SIZE = 32
   FAR_FUTURE_SLOT* = (not 0'u64).Slot
 
+  # Ideally align reasonably with fewish SQLite pages
+  VALIDATOR_CHUNK_SIZE* = 2048
+
   # https://github.com/ethereum/eth2.0-specs/blob/v1.0.0/specs/phase0/p2p-interface.md#configuration
   MAXIMUM_GOSSIP_CLOCK_DISPARITY* = 500.millis
 
@@ -653,8 +656,111 @@ type
     current_justified_checkpoint*: Checkpoint
     finalized_checkpoint*: Checkpoint
 
+  # https://github.com/ethereum/eth2.0-specs/blob/v1.0.0/specs/phase0/beacon-chain.md#beaconstate
+  BeaconStateNoImmutableValidators* = object
+    # Versioning
+    genesis_time*: uint64
+    genesis_validators_root*: Eth2Digest
+    slot*: Slot
+    fork*: Fork
+
+    # History
+    latest_block_header*: BeaconBlockHeader ##\
+    ## `latest_block_header.state_root == ZERO_HASH` temporarily
+
+    block_roots*: HashArray[Limit SLOTS_PER_HISTORICAL_ROOT, Eth2Digest] ##\
+    ## Needed to process attestations, older to newer
+
+    state_roots*: HashArray[Limit SLOTS_PER_HISTORICAL_ROOT, Eth2Digest]
+    historical_roots*: HashList[Eth2Digest, Limit HISTORICAL_ROOTS_LIMIT]
+
+    # Eth1
+    eth1_data*: Eth1Data
+    eth1_data_votes*:
+      HashList[Eth1Data, Limit(EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH)]
+    eth1_deposit_index*: uint64
+
+    # Registry
+    # TODO HashList vs List? zahary likes List
+    validators*: List[ValidatorStatus, Limit VALIDATOR_REGISTRY_LIMIT]
+    balances*: HashList[uint64, Limit VALIDATOR_REGISTRY_LIMIT]
+
+    # Randomness
+    randao_mixes*: HashArray[Limit EPOCHS_PER_HISTORICAL_VECTOR, Eth2Digest]
+
+    # Slashings
+    slashings*: HashArray[Limit EPOCHS_PER_SLASHINGS_VECTOR, uint64] ##\
+    ## Per-epoch sums of slashed effective balances
+
+    # Attestations
+    previous_epoch_attestations*:
+      HashList[PendingAttestation, Limit(MAX_ATTESTATIONS * SLOTS_PER_EPOCH)]
+    current_epoch_attestations*:
+      HashList[PendingAttestation, Limit(MAX_ATTESTATIONS * SLOTS_PER_EPOCH)]
+
+    # Finality
+    justification_bits*: uint8 ##\
+    ## Bit set for every recent justified epoch
+    ## Model a Bitvector[4] as a one-byte uint, which should remain consistent
+    ## with ssz/hashing.
+
+    previous_justified_checkpoint*: Checkpoint ##\
+    ## Previous epoch snapshot
+
+    current_justified_checkpoint*: Checkpoint
+    finalized_checkpoint*: Checkpoint
+
+  ImmutableValidatorList* = object
+    # all but one in db at any time will be full, so optimize for that
+    # in terms of database fragmentation etc
+    count*: uint64
+    immutableValidators*: array[VALIDATOR_CHUNK_SIZE, ImmutableValidatorData]
+
   DoppelgangerProtection* = object
     broadcastStartEpoch*: Epoch
+
+func getMutableValidatorStatus(validator: Validator): ValidatorStatus =
+  ValidatorStatus(
+      effective_balance: validator.effective_balance,
+      slashed: validator.slashed,
+      activation_eligibility_epoch: validator.activation_eligibility_epoch,
+      activation_epoch: validator.activation_epoch,
+      exit_epoch: validator.exit_epoch,
+      withdrawable_epoch: validator.withdrawable_epoch)
+
+func getMutableValidatorStatuses*(state: BeaconState):
+    List[ValidatorStatus, Limit VALIDATOR_REGISTRY_LIMIT] =
+  # use mapIt + .init(foo)?
+  for validator in state.validators:
+    result.add getMutableValidatorStatus(validator)
+
+func getBeaconStateNoImmutableValidators*(x: auto):
+    ref BeaconStateNoImmutableValidators =
+  # TODO this whole approach is a kludge; should be able to avoid copying and
+  # get SSZ to just serialize result.validators differently, concatenate from
+  # before + changed + after, or etc. also adding any additional copies, or a
+  # non-ref return type, hurts performance significantly.
+  result = new BeaconStateNoImmutableValidators
+  result.genesis_time = x.genesis_time
+  result.genesis_validators_root = x.genesis_validators_root
+  result.slot = x.slot
+  result.fork = x.fork
+  result.latest_block_header = x.latest_block_header
+  result.block_roots = x.block_roots
+  result.state_roots = x.state_roots
+  result.historical_roots = x.historical_roots
+  result.eth1_data = x.eth1_data
+  result.eth1_data_votes = x.eth1_data_votes
+  result.eth1_deposit_index = x.eth1_deposit_index
+  result.validators = x.getMutableValidatorStatuses()
+  result.balances = x.balances
+  result.randao_mixes = x.randao_mixes
+  result.slashings = x.slashings
+  result.previous_epoch_attestations = x.previous_epoch_attestations
+  result.current_epoch_attestations = x.current_epoch_attestations
+  result.justification_bits = x.justification_bits
+  result.previous_justified_checkpoint = x.previous_justified_checkpoint
+  result.finalized_checkpoint = x.finalized_checkpoint
 
 func getDepositMessage*(depositData: DepositData): DepositMessage =
   result.pubkey = depositData.pubkey

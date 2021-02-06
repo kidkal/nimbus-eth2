@@ -39,20 +39,6 @@ func applyValidatorIdentities(
       pubkey: item.pubkey,
       withdrawal_credentials: item.withdrawal_credentials)
 
-func getValidatorStatus(validator: Validator): ValidatorStatus =
-  ValidatorStatus(
-      effective_balance: validator.effective_balance,
-      slashed: validator.slashed,
-      activation_eligibility_epoch: validator.activation_eligibility_epoch,
-      activation_epoch: validator.activation_epoch,
-      exit_epoch: validator.exit_epoch,
-      withdrawable_epoch: validator.withdrawable_epoch)
-
-func getValidatorStatuses(state: BeaconState):
-    List[ValidatorStatus, Limit VALIDATOR_REGISTRY_LIMIT] =
-  for validator in state.validators:
-    result.add getValidatorStatus(validator)
-
 func setValidatorStatuses(
     validators: var HashList[Validator, Limit VALIDATOR_REGISTRY_LIMIT],
     hl: List[ValidatorStatus, Limit VALIDATOR_REGISTRY_LIMIT]) =
@@ -149,7 +135,7 @@ func diffStates*(state0, state1: BeaconState): BeaconStateDiff =
     eth1_data_votes: eth1_data_votes,
     eth1_deposit_index: state1.eth1_deposit_index,
 
-    validatorStatuses: getValidatorStatuses(state1),
+    validatorStatuses: getMutableValidatorStatuses(state1),
     balances: deltaEncodeBalances(state1.balances),
 
     # RANDAO mixes gets updated every block, in place

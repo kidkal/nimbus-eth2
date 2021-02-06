@@ -3,7 +3,7 @@ import
   chronicles, confutils, stew/byteutils, eth/db/kvstore_sqlite3,
   ../beacon_chain/network_metadata,
   ../beacon_chain/[beacon_chain_db, extras],
-  ../beacon_chain/block_pools/[chain_dag],
+  ../beacon_chain/block_pools/chain_dag,
   ../beacon_chain/spec/[crypto, datatypes, digest, helpers,
                         state_transition, presets],
   ../beacon_chain/[ssz, sszdump],
@@ -93,7 +93,9 @@ proc cmdBench(conf: DbConf, runtimePreset: RuntimePreset) =
   let
     db = BeaconChainDB.init(runtimePreset, conf.databaseDir.string)
     dbBenchmark = BeaconChainDB.init(runtimePreset, "benchmark")
-  defer: db.close()
+  defer:
+    db.close()
+    dbBenchmark.close()
 
   if not ChainDAGRef.isInitialized(db):
     echo "Database not initialized"
@@ -151,6 +153,17 @@ proc cmdBench(conf: DbConf, runtimePreset: RuntimePreset) =
     if conf.storeBlocks:
       withTimer(timers[tDbStore]):
         dbBenchmark.putBlock(b)
+
+      # TODO if kept, use separate setting maybe
+      withTimer(timers[tDbStore]):
+        if state[].data.slot mod SLOTS_PER_EPOCH == 0:
+          #dbBenchmark.putState(state[].root, state[].data)
+          let (baseIndex, immutableValidators) =
+            getImmutableValidators(state[].data)
+          dbBenchmark.putImmutableValidators(baseIndex, immutableValidators[])
+          dbBenchmark.putStateOnlyMutableValidators(
+            state[].root, getBeaconStateNoImmutableValidators(state[].data)[])
+        dbBenchmark.checkpoint()
 
   printTimers(false, timers)
 
